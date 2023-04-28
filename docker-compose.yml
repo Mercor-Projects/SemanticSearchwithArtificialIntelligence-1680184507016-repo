@@ -1,0 +1,88 @@
+version: "3"
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB}
+    volumes:
+      - '.resources/mongodb/data:/data/db'
+    ports:
+      - "27017:27017"
+    networks:
+      - mongo-net
+  milvus:
+    image: milvusdb/milvus:1.1.1-cpu-d061621-330cc6
+    ports:
+      - "19530:19530"
+      - "19121:19121"
+    volumes:
+      - ${MILVUS_DIR}/db:/var/lib/milvus/db
+      - ${MILVUS_DIR}/conf:/var/lib/milvus/conf
+      - ${MILVUS_DIR}/logs:/var/lib/milvus/logs
+      - ${MILVUS_DIR}/wal:/var/lib/milvus/wal
+    networks:
+      - milvus-net
+  tf-serving:
+    image: tensorflow/serving:latest-gpu
+    ports:
+      - "8500:8500"
+      - "8501:8501"
+    volumes:
+      - ${SERVING_MODELS_DIR}/dan:/models/dan
+      - ${SERVING_MODELS_DIR}/qa:/models/qa
+      - ${SERVING_MODELS_DIR}/models.config:/models/models.config
+    command: --model_config_file=/models/models.config
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: "nvidia"
+              capabilities: [ gpu ]
+    networks:
+      - tf-serving-net
+  search-api:
+    build:
+      context: ./search-api
+    command: sh -c "./start.sh"
+    ports:
+      - "3001:80"
+    volumes:
+      - ./resources/init_data/resources.txt:/app/data/resources.txt
+      - ./resources/init_data/questions.txt:/app/data/questions.txt
+      - ./search-api/src:/app/src
+    networks:
+      - mongo-net
+      - milvus-net
+      - tf-serving-net
+      - frontend-net
+    depends_on:
+      - milvus
+      - tf-serving
+      - mongodb
+    environment:
+      - MONGO_HOST=mongodb
+      - MILVUS_HOST=milvus
+      - TF_SERVING_HOST=tf-serving
+  client-app:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.prod
+    ports:
+      - '8080:80'
+    networks:
+      - frontend-net
+    environment:
+      - REACT_APP_API_ROOT=http://search-api:3001/api
+    depends_on:
+      - search-api
+
+networks:
+  tf-serving-net:
+  milvus-net:
+  mongo-net:
+  frontend-net:
